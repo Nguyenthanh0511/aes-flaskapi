@@ -1,0 +1,596 @@
+<!DOCTYPE html> 
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Chat với DES</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: 'Inter', sans-serif;
+            background-color: #f4f6f8;
+            color: #333;
+        }
+        .container {
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+        h1, h3 {
+            margin-bottom: 16px;
+            color: #2c3e50;
+        }
+        .card {
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .form-group input[type="text"],
+        .form-group input[type="password"],
+        .form-group input[type="file"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ccd0d5;
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+        .form-group button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            font-size: 1rem;
+            cursor: pointer;
+            background-color: #3498db;
+            color: #fff;
+            transition: background-color 0.2s ease;
+        }
+        .form-group button:hover {
+            background-color: #2980b9;
+        }
+        .form-group button:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
+        }
+        #messages {
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ccd0d5;
+            border-radius: 4px;
+            padding: 10px;
+            background-color: #fafafa;
+            margin-bottom: 15px;
+        }
+        #cipher_display {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #eceef0;
+            border-radius: 4px;
+            font-family: monospace;
+            word-break: break-all;
+        }
+        .file-message {
+            background-color: #e8f4fc;
+            padding: 8px;
+            border-radius: 4px;
+            margin: 5px 0;
+            cursor: pointer;
+        }
+        .file-message:hover {
+            background-color: #d1e8fa;
+        }
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid #ddd;
+            margin-bottom: 15px;
+        }
+        .tab {
+            padding: 10px 15px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+        .tab.active {
+            border-bottom: 2px solid #3498db;
+            font-weight: 500;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .progress {
+            width: 100%;
+            height: 12px;
+            background-color: #eceef0;
+            border-radius: 6px;
+            margin: 10px 0;
+            overflow: hidden;
+            display: none;
+        }
+        .progress-bar {
+            height: 100%;
+            background-color: #3498db;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .status {
+            font-size: 0.9rem;
+            color: #7f8c8d;
+            margin: 5px 0;
+            display: none;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>Secure Chat với AES - CNTT_1606</h1>
+
+        <div class="card">
+            <h3>Phần Chat</h3>
+            <div class="form-group">
+                <input type="text" id="room_id" placeholder="Nhập Room ID">
+                <input type="text" id="username" placeholder="Nhập tên người dùng">
+                <button onclick="joinRoom()">Tham gia Room</button>
+            </div>
+            <div id="messages"></div>
+            
+            <div class="tabs">
+                <div class="tab active" onclick="switchTab('text-tab', this)">Tin nhắn</div>
+                <div class="tab" onclick="switchTab('file-tab', this)">File</div>
+            </div>
+            
+            <div id="text-tab" class="tab-content active">
+                <div class="form-group">
+                    <input type="password" id="enc_key" placeholder="Khóa mã hóa">
+                    <input type="text" id="message" placeholder="Nội dung tin nhắn">
+                    <button onclick="sendMessage()">Gửi</button>
+                </div>
+                <div id="cipher_display"></div>
+                <div class="form-group">
+                    <input type="password" id="dec_key" placeholder="Khóa giải mã">
+                    <button onclick="decryptMessage()">Giải mã tin nhắn</button>
+                </div>
+            </div>
+            
+            <div id="file-tab" class="tab-content">
+                <div class="form-group">
+                    <input type="file" id="chatFile" accept=".txt,.png,.jpg,.jpeg">
+                    <input type="password" id="fileEncKey" placeholder="Khóa mã hóa file">
+                    <button onclick="sendFile()">Gửi File</button>
+                </div>
+                <div class="progress">
+                    <div class="progress-bar"></div>
+                </div>
+                <div class="status"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let currentRoom = null;
+        let username = null;
+        const receivedFiles = new Map(); // Lưu trữ các file đã nhận
+        
+        // Đăng ký xử lý các events của socket.io
+        socket.on('connect', () => {
+            console.log('Connected to server');
+        });
+        
+        socket.on('new_message', data => {
+            const msgBox = document.getElementById('messages');
+            msgBox.innerHTML += `<p><strong>${data.sender}:</strong> ${data.ciphertext}</p>`;
+            msgBox.scrollTop = msgBox.scrollHeight;
+            document.getElementById('cipher_display').innerText = data.ciphertext;
+        });
+        
+        socket.on('file_chunk', handleFileChunk);
+        socket.on('file_complete', handleFileComplete);
+
+        function switchTab(tabId, tabElement) {
+            // Ẩn tất cả tab-content
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Hiển thị tab được chọn
+            document.getElementById(tabId).classList.add('active');
+            
+            // Cập nhật trạng thái active của tab
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            tabElement.classList.add('active');
+        }
+
+        function joinRoom() {
+            const roomInput = document.getElementById('room_id').value.trim();
+            username = document.getElementById('username').value.trim() || 'User' + Math.random().toString(36).substr(2,5);
+            
+            if (!roomInput) {
+                alert('Vui lòng nhập Room ID để tham gia.');
+                return;
+            }
+            
+            currentRoom = roomInput;
+            socket.emit('join', { room_id: currentRoom, username: username });
+            alert(`Bạn đã tham gia Room: ${currentRoom} với tên ${username} thành công!`);
+        }
+
+        function sendMessage() {
+            const key = document.getElementById('enc_key').value.trim();
+            const msg = document.getElementById('message').value.trim();
+            
+            if (!currentRoom) {
+                alert('Bạn chưa tham gia Room nào.');
+                return;
+            }
+            if (!key) {
+                alert('Khóa mã hóa là bắt buộc.');
+                return;
+            }
+            if (!msg) {
+                alert('Nội dung tin nhắn không được trống.');
+                return;
+            }
+            
+            socket.emit('send_message', {
+                message: msg,
+                key: key,
+                room_id: currentRoom,
+                sender: username || ('User' + Math.random().toString(36).substr(2,5))
+            });
+            
+            document.getElementById('message').value = '';
+        }
+
+        function decryptMessage() {
+            const btn = document.querySelector('button[onclick="decryptMessage()"]');
+            const ciphertext = document.getElementById('cipher_display').innerText;
+            const key = document.getElementById('dec_key').value;
+            
+            if (!ciphertext) {
+                alert('Không có tin nhắn nào để giải mã.');
+                return;
+            }
+            if (!key) {
+                alert('Vui lòng nhập khóa giải mã.');
+                return;
+            }
+            
+            btn.disabled = true;
+            
+            fetch('/decrypt', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ciphertext, key })
+            })
+            .then(r => r.ok ? r.json() : Promise.reject(`HTTP status ${r.status}`))
+            .then(data => {
+                if (data.plaintext) {
+                    alert(`Giải mã thành công:\n${data.plaintext}`);
+                } else {
+                    alert(`Lỗi: ${data.error}`);
+                }
+            })
+            .catch(e => alert(`Giải mã thất bại: ${e}`))
+            .finally(() => btn.disabled = false);
+        }
+
+        function sendFile() {
+            const fileInput = document.getElementById('chatFile');
+            const key = document.getElementById('fileEncKey').value.trim();
+            
+            if (!currentRoom) {
+                alert('Bạn chưa tham gia Room nào.');
+                return;
+            }
+            if (!fileInput.files.length) {
+                alert('Vui lòng chọn file để gửi.');
+                return;
+            }
+            if (!key) {
+                alert('Khóa mã hóa file là bắt buộc.');
+                return;
+            }
+            
+            const file = fileInput.files[0];
+            const progressBar = document.querySelector('.progress');
+            const progressBarInner = document.querySelector('.progress-bar');
+            const statusDiv = document.querySelector('.status');
+            
+            progressBar.style.display = 'block';
+            statusDiv.style.display = 'block';
+            statusDiv.textContent = 'Đang đọc file...';
+            
+            // Đọc file và gửi qua socket
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const fileData = e.target.result;
+                statusDiv.textContent = 'Đang mã hóa file...';
+                
+                // Mã hóa file trên client (thông qua server)
+                encryptClientSide(fileData, key)
+                    .then(encryptedData => {
+                        // Gửi file thông qua chunks để xử lý file lớn
+                        const chunkSize = 64 * 1024; // 64KB chunks
+                        const totalChunks = Math.ceil(encryptedData.byteLength / chunkSize);
+                        const fileId = Date.now().toString() + Math.random().toString(36).substring(2, 15);
+                        
+                        statusDiv.textContent = `Đang gửi file... (0/${totalChunks})`;
+                        
+                        // Gửi metadata trước
+                        socket.emit('file_metadata', {
+                            room_id: currentRoom,
+                            sender: username,
+                            fileId: fileId,
+                            fileName: file.name,
+                            fileType: file.type,
+                            totalChunks: totalChunks,
+                            fileSize: encryptedData.byteLength
+                        });
+                        
+                        // Gửi từng chunk
+                        for (let i = 0; i < totalChunks; i++) {
+                            const start = i * chunkSize;
+                            const end = Math.min(start + chunkSize, encryptedData.byteLength);
+                            const chunk = encryptedData.slice(start, end);
+                            
+                            // Sử dụng setTimeout để tránh tràn buffer
+                            setTimeout(() => {
+                                socket.emit('file_chunk', {
+                                    room_id: currentRoom,
+                                    fileId: fileId,
+                                    chunkIndex: i,
+                                    chunk: Array.from(new Uint8Array(chunk)),
+                                    isLast: i === totalChunks - 1
+                                });
+                                
+                                // Cập nhật UI
+                                const progress = Math.round(((i + 1) / totalChunks) * 100);
+                                progressBarInner.style.width = `${progress}%`;
+                                statusDiv.textContent = `Đang gửi file... (${i+1}/${totalChunks})`;
+                                
+                                if (i === totalChunks - 1) {
+                                    setTimeout(() => {
+                                        statusDiv.textContent = 'Đã gửi file thành công!';
+                                        setTimeout(() => {
+                                            progressBar.style.display = 'none';
+                                            statusDiv.style.display = 'none';
+                                            fileInput.value = '';
+                                        }, 3000);
+                                    }, 200);
+                                }
+                            }, i * 50); // Thêm độ trễ nhỏ giữa các gói
+                        }
+                    })
+                    .catch(error => {
+                        console.error(error);
+                        alert('Lỗi mã hóa file: ' + error.message);
+                        progressBar.style.display = 'none';
+                        statusDiv.style.display = 'none';
+                    });
+            };
+            
+            reader.onerror = function() {
+                alert('Không thể đọc file.');
+                progressBar.style.display = 'none';
+                statusDiv.style.display = 'none';
+            };
+            
+            reader.readAsArrayBuffer(file);
+        }
+
+        // Mã hóa file phía client sử dụng phương pháp thay thế tương thích với code của server
+        function encryptClientSide(fileData, key) {
+            return new Promise((resolve, reject) => {
+                try {
+                    // DES sử dụng 8 bytes cho key, cắt bớt hoặc padding nếu cần
+                    let keyBytes = new TextEncoder().encode(key);
+                    if (keyBytes.length > 8) {
+                        keyBytes = keyBytes.slice(0, 8);
+                    } else if (keyBytes.length < 8) {
+                        const paddedKey = new Uint8Array(8);
+                        paddedKey.set(keyBytes);
+                        keyBytes = paddedKey;
+                    }
+                    
+                    // Chuyển đổi ArrayBuffer thành mảng byte
+                    const data = new Uint8Array(fileData);
+                    
+                    // Thêm PKCS#7 padding (giống với server)
+                    const blockSize = 8; // DES block size
+                    const paddingLength = blockSize - (data.length % blockSize);
+                    const paddedData = new Uint8Array(data.length + paddingLength);
+                    paddedData.set(data);
+                    paddedData.fill(paddingLength, data.length); // Điền padding bằng giá trị của padding length
+                    
+                    // Mã hóa thủ công (sử dụng mã JavaScript thuần túy để mã hóa DES)
+                    // Đây là phương pháp thay thế vì Web Crypto API không hỗ trợ DES trên một số trình duyệt
+                    
+                    // Gửi lên server để mã hóa
+                    fetch('/encrypt_data', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            data: Array.from(paddedData),
+                            key: key
+                        })
+                    })
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error('Lỗi khi mã hóa dữ liệu');
+                        }
+                        return response.json();
+                    })
+                    .then(result => {
+                        if (result.error) {
+                            reject(new Error(result.error));
+                        } else {
+                            // Chuyển đổi mảng byte từ server thành ArrayBuffer
+                            const encryptedData = new Uint8Array(result.encrypted);
+                            resolve(encryptedData.buffer);
+                        }
+                    })
+                    .catch(error => {
+                        reject(error);
+                    });
+                } catch (error) {
+                    reject(error);
+                }
+            });
+        }
+
+        // Giải mã file phía client
+        function decryptClientSide(encryptedData, key) {
+            return new Promise((resolve, reject) => {
+                try {
+                    // Chuyển đổi ArrayBuffer thành mảng byte để gửi qua POST
+                    const encryptedBytes = Array.from(new Uint8Array(encryptedData));
+                    
+                    // Gửi lên server để giải mã
+                    fetch('/decrypt_data', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            data: encryptedBytes,
+                            key: key
+                        })
+                    })
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error('Lỗi khi giải mã dữ liệu');
+                        }
+                        return response.json();
+                    })
+                    .then(result => {
+                        if (result.error) {
+                            reject(new Error(result.error));
+                        } else {
+                            // Chuyển đổi mảng byte từ server thành ArrayBuffer
+                            const decryptedData = new Uint8Array(result.decrypted);
+                            resolve(decryptedData.buffer);
+                        }
+                    })
+                    .catch(error => {
+                        reject(error);
+                    });
+                } catch (error) {
+                    reject(error);
+                }
+            });
+        }
+        
+        // Xử lý từng chunk file nhận được
+        function handleFileChunk(data) {
+            const { fileId, chunkIndex, chunk } = data;
+            
+            if (!receivedFiles.has(fileId)) {
+                receivedFiles.set(fileId, {
+                    chunks: [],
+                    metadata: null,
+                    receivedChunks: 0
+                });
+            }
+            
+            const fileData = receivedFiles.get(fileId);
+            fileData.chunks[chunkIndex] = new Uint8Array(chunk);
+            fileData.receivedChunks++;
+            
+            // Kiểm tra nếu đã nhận đủ các chunks và metadata
+            if (fileData.metadata && fileData.receivedChunks === fileData.metadata.totalChunks) {
+                // Gộp tất cả các chunks
+                const fullFile = new Uint8Array(fileData.metadata.fileSize);
+                let offset = 0;
+                
+                for (let i = 0; i < fileData.metadata.totalChunks; i++) {
+                    fullFile.set(fileData.chunks[i], offset);
+                    offset += fileData.chunks[i].length;
+                }
+                
+                // Hiển thị thông báo file đã nhận
+                const msgBox = document.getElementById('messages');
+                const fileElement = document.createElement('div');
+                fileElement.className = 'file-message';
+                fileElement.innerHTML = `<strong>${fileData.metadata.sender}:</strong> Đã gửi file <strong>${fileData.metadata.fileName}</strong> (Nhấp để giải mã và tải về)`;
+                fileElement.onclick = function() {
+                    promptDecryptFile(fileId, fileData.metadata.fileName, fullFile.buffer);
+                };
+                
+                msgBox.appendChild(fileElement);
+                msgBox.scrollTop = msgBox.scrollHeight;
+            }
+        }
+        
+        // Xử lý metadata của file
+        function handleFileComplete(data) {
+            const { fileId, sender, fileName, fileType, totalChunks, fileSize } = data;
+            
+            if (!receivedFiles.has(fileId)) {
+                receivedFiles.set(fileId, {
+                    chunks: [],
+                    metadata: null,
+                    receivedChunks: 0
+                });
+            }
+            
+            const fileData = receivedFiles.get(fileId);
+            fileData.metadata = {
+                sender,
+                fileName,
+                fileType,
+                totalChunks,
+                fileSize
+            };
+        }
+        
+        // Hiển thị hộp thoại để nhập khóa giải mã và tải file
+        function promptDecryptFile(fileId, fileName, encryptedData) {
+            const key = prompt(`Nhập khóa giải mã cho file "${fileName}":`);
+            if (!key) return;
+            
+            const statusDiv = document.querySelector('.status');
+            statusDiv.style.display = 'block';
+            statusDiv.textContent = 'Đang giải mã file...';
+            
+            decryptClientSide(encryptedData, key)
+                .then(decryptedData => {
+                    // Tạo Blob và tải file
+                    let fileType = 'application/octet-stream';
+                    if (fileName.endsWith('.txt')) fileType = 'text/plain';
+                    else if (fileName.endsWith('.png')) fileType = 'image/png';
+                    else if (fileName.endsWith('.jpg') || fileName.endsWith('.jpeg')) fileType = 'image/jpeg';
+                    
+                    const blob = new Blob([decryptedData], { type: fileType });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = fileName;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    
+                    statusDiv.textContent = 'File đã được giải mã và tải xuống thành công!';
+                    setTimeout(() => {
+                        statusDiv.style.display = 'none';
+                    }, 3000);
+                })
+                .catch(error => {
+                    console.error(error);
+                    alert('Lỗi giải mã: ' + error.message);
+                    statusDiv.style.display = 'none';
+                });
+        }
+    </script>
+</body>
+</html>
