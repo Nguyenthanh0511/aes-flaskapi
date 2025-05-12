@@ -2,7 +2,7 @@ Secure Chat với AES - CNTT_1606
 
 Giới thiệu:
 Đây là một ứng dụng chat bảo mật sử dụng thuật toán mã hóa AES để bảo vệ thông tin truyền tải. Ứng dụng này được xây dựng bằng HTML, CSS, JavaScript và sử dụng Socket.IO để thực hiện giao tiếp thời gian thực giữa các client.
-<img src="./imageWebsiteChat" alt="Hình ảnh ứng dụng">
+<img src="./imageWebsiteChat.png" alt="Hình ảnh ứng dụng">
 
 Tính năng:
 - Gửi và nhận tin nhắn bảo mật giữa các client
